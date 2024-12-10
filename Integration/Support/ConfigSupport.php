@@ -13,5 +13,6 @@ class ConfigSupport extends LeuchtfeuerIdentitySyncIntegration implements Config
     use DefaultConfigFormTrait;
 
     public function __construct()
-    {}
+    {
+    }
 }
