@@ -17,85 +17,112 @@ use Mautic\LeadBundle\Tracker\DeviceTracker;
 use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Exception\EnforceMatchingException;
 use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Integration\Config;
 use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Utility\DataProviderUtility;
-use Monolog\Logger;
+use Psr\Log\LoggerInterface as Logger;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Doctrine\Persistence\ManagerRegistry;
+use Mautic\CoreBundle\Factory\MauticFactory;
+use Mautic\CoreBundle\Factory\ModelFactory;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
+use Mautic\CoreBundle\Helper\UserHelper;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\CoreBundle\Service\FlashBag;
+use Mautic\CoreBundle\Translation\Translator;
+use Mautic\FormBundle\Helper\FormFieldHelper;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\Form\FormFactoryInterface;
+use Symfony\Component\HttpFoundation\RequestStack;
 
 class PublicController extends CommonFormController
 {
-    protected Config $config;
-    protected DataProviderUtility $dataProviderUtility;
-    protected ContactTracker $contactTracker;
-    protected DeviceTracker $deviceTracker;
-    protected CookieHelper $cookieHelper;
-    protected IpLookupHelper $ipLookupHelper;
-    protected AuditLogModel $auditLogModel;
-    protected Logger $logger;
     protected LeadRepository $leadRepository;
+    protected Request $request;
+    /** @var array<string, string> */
     protected array $publiclyUpdatableFieldValues = [];
     protected const LOG_PREFIX = 'MCONTROL';
 
     public function __construct(
-        Config $config,
-        DataProviderUtility $dataProviderUtility,
-        ContactTracker $contactTracker,
-        DeviceTracker $deviceTracker,
-        CookieHelper $cookieHelper,
-        IpLookupHelper $ipLookupHelper,
-        AuditLogModel $auditLogModel,
-        Logger $logger
+        protected Config $config,
+        protected DataProviderUtility $dataProviderUtility,
+        protected ContactTracker $contactTracker,
+        protected DeviceTracker $deviceTracker,
+        protected CookieHelper $cookieHelper,
+        protected IpLookupHelper $ipLookupHelper,
+        protected AuditLogModel $auditLogModel,
+        protected Logger $logger,
+        RequestStack $requestStack,
+        FormFactoryInterface $formFactory,
+        FormFieldHelper $fieldHelper,
+        ManagerRegistry $doctrine,
+        MauticFactory $factory,
+        ModelFactory $modelFactory,
+        UserHelper $userHelper,
+        CoreParametersHelper $coreParametersHelper,
+        EventDispatcherInterface $dispatcher,
+        Translator $translator,
+        FlashBag $flashBag,
+        CorePermissions $security
     ) {
-        $this->config = $config;
-        $this->dataProviderUtility = $dataProviderUtility;
-        $this->contactTracker = $contactTracker;
-        $this->deviceTracker = $deviceTracker;
-        $this->cookieHelper = $cookieHelper;
-        $this->ipLookupHelper = $ipLookupHelper;
-        $this->auditLogModel = $auditLogModel;
-        $this->logger = $logger;
+        parent::__construct(
+            $formFactory,
+            $fieldHelper,
+            $doctrine,
+            $factory,
+            $modelFactory,
+            $userHelper,
+            $coreParametersHelper,
+            $dispatcher,
+            $translator,
+            $flashBag,
+            $requestStack,
+            $security
+        );
+        $this->request        = $requestStack->getCurrentRequest();
     }
 
     /**
      * @return Response
      * @throws \Exception
      */
-    public function identityControlImageAction(): Response
+    public function identityControlImageAction(Request $request): Response
     {
         // do nothing if plugin is disabled
         if (!$this->config->isPublished()) {
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
-        $get  = $this->request->query->all();
-        $post = $this->request->request->all();
+        $get   = $request->query->all();
+        $post  = $request->request->all();
         $query = \array_merge($get, $post);
 
         // end response if no query params are given
         if (empty($query)) {
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // check if at least one query param-field is a unique-identifier and publicly-updatable
-        /** @var LeadModel $model */
+        /** @var LeadModel $leadModel */
         $leadModel = $this->getModel('lead');
         $this->leadRepository = $leadModel->getRepository();
+        $result = $leadModel->checkForDuplicateContact($query, true, true);
 
         /** @var Lead $leadFromQuery */
-        [$leadFromQuery, $this->publiclyUpdatableFieldValues] = $leadModel->checkForDuplicateContact($query, null, true, true);
-        $uniqueLeadIdentifiers = $this->dataProviderUtility->getUniqueIdentifierFieldNames();
+        $leadFromQuery                      = $result[0];
+        $this->publiclyUpdatableFieldValues = $result[1];
+        $uniqueLeadIdentifiers              = $this->dataProviderUtility->getUniqueIdentifierFieldNames();
 
-        $isAtLeastOneUniqueIdentifierPubliclyUpdatable = function () use ($uniqueLeadIdentifiers) {
+        $isAtLeastOneUniqueIdentifierPubliclyUpdatable = function () use ($uniqueLeadIdentifiers): bool {
             $publiclyUpdatableFieldNames = array_keys($this->publiclyUpdatableFieldValues);
             return count(array_intersect($publiclyUpdatableFieldNames, $uniqueLeadIdentifiers)) > 0;
         };
 
         // end response if not at least one unique publicly-updatable field exists
         if (!$isAtLeastOneUniqueIdentifierPubliclyUpdatable()) {
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // check if cookie-lead exists
-        $leadFromCookie = $this->request->cookies->get('mtc_id', null);
+        $leadFromCookie = $request->cookies->get('mtc_id', null);
 
         if ($leadFromCookie !== null) {
             /** @var Lead $leadFromCookie */
@@ -114,18 +141,18 @@ class PublicController extends CommonFormController
 
             if ($lead === null) {
                 $this->logger->error(sprintf('%s: No contact was created, usually this means that an active user-session (Mautic login) was found! Try it again in another browser or use a tab in privacy-mode.', self::LOG_PREFIX));
-                return $this->createPixelResponse($this->request);
+                return $this->createPixelResponse($request);
             }
 
             $this->updateLeadWithQueryParams($lead, $query);
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // get feature-settings from plugin configuration
         $featureSettings = $this->config->getFeatureSettings();
 
         // check if unique field-values matching the cookie-lead
-        $uniqueIdentifierFromQueryLeadMatchingLead = function (Lead $lead) use ($leadFromQuery, $featureSettings, $query) {
+        $uniqueIdentifiersFromQueryLeadMatchingLead = function (Lead $lead) use ($leadFromQuery, $uniqueLeadIdentifiers, $query): bool {
             if (empty($featureSettings['parameter_primary'] ?? null)) {
                 throw new \Exception('The required plugin feature-setting "parameter_primary" is not set!');
             }
@@ -173,18 +200,18 @@ class PublicController extends CommonFormController
         };*/
 
         try {
-            if ($uniqueIdentifierFromQueryLeadMatchingLead($leadFromCookie)) {
+            if ($uniqueIdentifiersFromQueryLeadMatchingLead($leadFromCookie)) {
                 // we call ContactTracker->getContact() here to update the last-activity
                 $this->contactTracker->setTrackedContact($leadFromCookie);
                 $this->contactTracker->getContact();
 
                 // update publicly-updatable fields of cookie-lead with query param values and end response
                 $this->updateLeadWithQueryParams($leadFromCookie, $query);
-                return $this->createPixelResponse($this->request);
+                return $this->createPixelResponse($request);
             }
         } catch (EnforceMatchingException $e) {
             $this->logger->error(sprintf('%s: %s (%d)', self::LOG_PREFIX, $e->getMessage(), $e->getCode()));
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // exchange cookie with ID from query-lead and end response
@@ -195,11 +222,11 @@ class PublicController extends CommonFormController
             // write audit-log for query-lead
             $message = sprintf('Exchange lead by respond with Mautic cookie "mtc_id=%d"', $leadFromQuery->getId());
             $this->addAuditLogForLead($leadFromQuery, 'identified', ['message' => $message]);
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // check if the unique-identifiers of the cookie-lead are empty
-        $uniqueIdentifiersFromCookieLeadAreEmpty = function (Lead $lead) use ($uniqueLeadIdentifiers) {
+        $uniqueIdentifiersFromCookieLeadAreEmpty = function (Lead $lead) use ($uniqueLeadIdentifiers): bool {
             $result = false;
             foreach ($uniqueLeadIdentifiers as $uniqueLeadIdentifier) {
                 $fieldGetterName = 'get' . $uniqueLeadIdentifier; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
@@ -213,7 +240,7 @@ class PublicController extends CommonFormController
         if ($uniqueIdentifiersFromCookieLeadAreEmpty($leadFromCookie)) {
             // update publicly-updatable fields of cookie-lead with query param values and end response
             $this->updateLeadWithQueryParams($leadFromCookie, $query);
-            return $this->createPixelResponse($this->request);
+            return $this->createPixelResponse($request);
         }
 
         // create new lead with values from query, set cookie and end response
@@ -230,9 +257,9 @@ class PublicController extends CommonFormController
         }
 
         // create a device for the lead here which sets the device-tracking cookies
-        $this->deviceTracker->createDeviceFromUserAgent($leadFromQuery, $this->request->server->get('HTTP_USER_AGENT'));
+        $this->deviceTracker->createDeviceFromUserAgent($leadFromQuery, $request->server->get('HTTP_USER_AGENT'));
 
-        return $this->createPixelResponse($this->request);
+        return $this->createPixelResponse($request);
     }
 
     /**
