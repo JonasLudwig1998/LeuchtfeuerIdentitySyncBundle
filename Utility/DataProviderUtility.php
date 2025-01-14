@@ -6,19 +6,17 @@ namespace MauticPlugin\LeuchtfeuerIdentitySyncBundle\Utility;
 
 use Doctrine\ORM\EntityManager;
 
-class DataProviderUtility {
-    protected EntityManager $entityManager;
-
-    public function __construct(EntityManager $entityManager)
+class DataProviderUtility
+{
+    public function __construct(protected EntityManager $entityManager)
     {
-        $this->entityManager = $entityManager;
     }
 
     /**
-     * It's not easy to extend the LeadFieldRepository, so we use this utility method to return unique contact field-names
+     * It's not easy to extend the LeadFieldRepository, so we use this utility method to return unique contact field-names.
      *
-     * @param string $object
      * @return mixed[]|null
+     *
      * @throws \Doctrine\DBAL\Exception
      */
     public function getUniqueIdentifierFieldNames(string $object = 'lead'): ?array

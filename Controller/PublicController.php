@@ -4,11 +4,20 @@ namespace MauticPlugin\LeuchtfeuerIdentitySyncBundle\Controller;
 
 use Doctrine\ORM\Exception\ORMException;
 use Doctrine\ORM\OptimisticLockException;
+use Doctrine\Persistence\ManagerRegistry;
 use Mautic\CoreBundle\Controller\FormController as CommonFormController;
+use Mautic\CoreBundle\Factory\MauticFactory;
+use Mautic\CoreBundle\Factory\ModelFactory;
 use Mautic\CoreBundle\Helper\CookieHelper;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Mautic\CoreBundle\Helper\IpLookupHelper;
 use Mautic\CoreBundle\Helper\TrackingPixelHelper;
+use Mautic\CoreBundle\Helper\UserHelper;
 use Mautic\CoreBundle\Model\AuditLogModel;
+use Mautic\CoreBundle\Security\Permissions\CorePermissions;
+use Mautic\CoreBundle\Service\FlashBag;
+use Mautic\CoreBundle\Translation\Translator;
+use Mautic\FormBundle\Helper\FormFieldHelper;
 use Mautic\LeadBundle\Entity\Lead;
 use Mautic\LeadBundle\Entity\LeadRepository;
 use Mautic\LeadBundle\Model\LeadModel;
@@ -18,20 +27,11 @@ use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Exception\EnforceMatchingExceptio
 use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Integration\Config;
 use MauticPlugin\LeuchtfeuerIdentitySyncBundle\Utility\DataProviderUtility;
 use Psr\Log\LoggerInterface as Logger;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
-use Doctrine\Persistence\ManagerRegistry;
-use Mautic\CoreBundle\Factory\MauticFactory;
-use Mautic\CoreBundle\Factory\ModelFactory;
-use Mautic\CoreBundle\Helper\CoreParametersHelper;
-use Mautic\CoreBundle\Helper\UserHelper;
-use Mautic\CoreBundle\Security\Permissions\CorePermissions;
-use Mautic\CoreBundle\Service\FlashBag;
-use Mautic\CoreBundle\Translation\Translator;
-use Mautic\FormBundle\Helper\FormFieldHelper;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Form\FormFactoryInterface;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestStack;
+use Symfony\Component\HttpFoundation\Response;
 
 class PublicController extends CommonFormController
 {
@@ -39,7 +39,7 @@ class PublicController extends CommonFormController
     protected Request $request;
     /** @var array<string, string> */
     protected array $publiclyUpdatableFieldValues = [];
-    protected const LOG_PREFIX = 'MCONTROL';
+    protected const LOG_PREFIX                    = 'MCONTROL';
 
     public function __construct(
         protected Config $config,
@@ -81,7 +81,6 @@ class PublicController extends CommonFormController
     }
 
     /**
-     * @return Response
      * @throws \Exception
      */
     public function identityControlImageAction(Request $request): Response
@@ -102,9 +101,9 @@ class PublicController extends CommonFormController
 
         // check if at least one query param-field is a unique-identifier and publicly-updatable
         /** @var LeadModel $leadModel */
-        $leadModel = $this->getModel('lead');
+        $leadModel            = $this->getModel('lead');
         $this->leadRepository = $leadModel->getRepository();
-        $result = $leadModel->checkForDuplicateContact($query, true, true);
+        $result               = $leadModel->checkForDuplicateContact($query, true, true);
 
         /** @var Lead $leadFromQuery */
         $leadFromQuery                      = $result[0];
@@ -113,6 +112,7 @@ class PublicController extends CommonFormController
 
         $isAtLeastOneUniqueIdentifierPubliclyUpdatable = function () use ($uniqueLeadIdentifiers): bool {
             $publiclyUpdatableFieldNames = array_keys($this->publiclyUpdatableFieldValues);
+
             return count(array_intersect($publiclyUpdatableFieldNames, $uniqueLeadIdentifiers)) > 0;
         };
 
@@ -124,7 +124,7 @@ class PublicController extends CommonFormController
         // check if cookie-lead exists
         $leadFromCookie = $request->cookies->get('mtc_id', null);
 
-        if ($leadFromCookie !== null) {
+        if (null !== $leadFromCookie) {
             /** @var Lead $leadFromCookie */
             $leadFromCookie = $leadModel->getEntity($leadFromCookie);
         }
@@ -139,12 +139,14 @@ class PublicController extends CommonFormController
             // create lead with values from query param, set cookie and end response
             $lead = $this->contactTracker->getContact(); // this call does not set the given query-params, we've to manually add them via updateLeadWithQueryParams()
 
-            if ($lead === null) {
+            if (null === $lead) {
                 $this->logger->error(sprintf('%s: No contact was created, usually this means that an active user-session (Mautic login) was found! Try it again in another browser or use a tab in privacy-mode.', self::LOG_PREFIX));
+
                 return $this->createPixelResponse($request);
             }
 
             $this->updateLeadWithQueryParams($lead, $query);
+
             return $this->createPixelResponse($request);
         }
 
@@ -152,14 +154,14 @@ class PublicController extends CommonFormController
         $featureSettings = $this->config->getFeatureSettings();
 
         // check if unique field-values matching the cookie-lead
-        $uniqueIdentifiersFromQueryLeadMatchingLead = function (Lead $lead) use ($leadFromQuery, $uniqueLeadIdentifiers, $query): bool {
+        $uniqueIdentifiersFromQueryLeadMatchingLead = function (Lead $lead) use ($leadFromQuery, $query, $featureSettings): bool {
             if (empty($featureSettings['parameter_primary'] ?? null)) {
                 throw new \Exception('The required plugin feature-setting "parameter_primary" is not set!');
             }
 
             // first checking the configured primary-parameter
             if (array_key_exists($featureSettings['parameter_primary'], $query)) {
-                $fieldGetterNamePrimary = 'get' . $featureSettings['parameter_primary']; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
+                $fieldGetterNamePrimary = 'get'.$featureSettings['parameter_primary']; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
 
                 $result = true;
                 if ($lead->$fieldGetterNamePrimary() !== $leadFromQuery->$fieldGetterNamePrimary()) {
@@ -168,10 +170,10 @@ class PublicController extends CommonFormController
 
                 // check if the secondary-parameter is set to enforce matching
                 if (!empty($featureSettings['parameter_secondary'] ?? null)) {
-                    $fieldGetterNameSecondary = 'get' . $featureSettings['parameter_secondary'];
+                    $fieldGetterNameSecondary = 'get'.$featureSettings['parameter_secondary'];
 
                     // check if the secondary-parameter exist in the query and that it matches the query-lead, if not stop processing here
-                    if (!array_key_exists($featureSettings['parameter_secondary'], $query) || $leadFromQuery->$fieldGetterNameSecondary() !== ($query[$featureSettings['parameter_secondary']] ?? '')) {
+                    if (!array_key_exists($featureSettings['parameter_secondary'], $query) || $leadFromQuery->$fieldGetterNameSecondary() !== $query[$featureSettings['parameter_secondary']]) {
                         // the secondary-parameter didn't match. we stop processing here by throwing an exception to force the caller to implement a handling like writing a log or audit entry (seen as $result = false, but to stop processing we use an exception)
                         throw new EnforceMatchingException(sprintf('The given lead #%d matches the query-lead #%d using configured primary-parameter "%s" for identification, but the secondary-parameter "%s" did not match!', $lead->getId(), $leadFromQuery->getId(), $featureSettings['parameter_primary'], $featureSettings['parameter_secondary']), 1695899935);
                     }
@@ -207,10 +209,12 @@ class PublicController extends CommonFormController
 
                 // update publicly-updatable fields of cookie-lead with query param values and end response
                 $this->updateLeadWithQueryParams($leadFromCookie, $query);
+
                 return $this->createPixelResponse($request);
             }
         } catch (EnforceMatchingException $e) {
             $this->logger->error(sprintf('%s: %s (%d)', self::LOG_PREFIX, $e->getMessage(), $e->getCode()));
+
             return $this->createPixelResponse($request);
         }
 
@@ -222,6 +226,7 @@ class PublicController extends CommonFormController
             // write audit-log for query-lead
             $message = sprintf('Exchange lead by respond with Mautic cookie "mtc_id=%d"', $leadFromQuery->getId());
             $this->addAuditLogForLead($leadFromQuery, 'identified', ['message' => $message]);
+
             return $this->createPixelResponse($request);
         }
 
@@ -229,17 +234,19 @@ class PublicController extends CommonFormController
         $uniqueIdentifiersFromCookieLeadAreEmpty = function (Lead $lead) use ($uniqueLeadIdentifiers): bool {
             $result = false;
             foreach ($uniqueLeadIdentifiers as $uniqueLeadIdentifier) {
-                $fieldGetterName = 'get' . $uniqueLeadIdentifier; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
+                $fieldGetterName = 'get'.$uniqueLeadIdentifier; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
                 if (empty($lead->$fieldGetterName())) {
                     $result = true;
                     break;
                 }
             }
+
             return $result;
         };
         if ($uniqueIdentifiersFromCookieLeadAreEmpty($leadFromCookie)) {
             // update publicly-updatable fields of cookie-lead with query param values and end response
             $this->updateLeadWithQueryParams($leadFromCookie, $query);
+
             return $this->createPixelResponse($request);
         }
 
@@ -263,6 +270,8 @@ class PublicController extends CommonFormController
     }
 
     /**
+     * @param array<string, mixed> $query
+     *
      * @throws OptimisticLockException
      * @throws ORMException
      */
@@ -272,7 +281,7 @@ class PublicController extends CommonFormController
 
         foreach ($this->publiclyUpdatableFieldValues as $leadField => $value) {
             // update lead with values from query
-            $fieldSetterName = 'set' . $leadField; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
+            $fieldSetterName = 'set'.$leadField; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
             $lead->$fieldSetterName($query[$leadField]);
             $leadUpdated = true;
         }
@@ -283,31 +292,29 @@ class PublicController extends CommonFormController
     }
 
     /**
-     * Create audit-log for lead
-     * @param Lead $lead
-     * @param string $action should be 'identified', 'create' or 'update'
-     * @param array $details will be serialized and shown in audit-log toggle e.g. if action is 'update'
-     * @return void
+     * Create audit-log for lead.
+     *
+     * @param string               $action  should be 'identified', 'create' or 'update'
+     * @param array<string, mixed> $details will be serialized and shown in audit-log toggle e.g. if action is 'update'
      */
-    protected function addAuditLogForLead(Lead $lead, string $action, array $details = [])
+    protected function addAuditLogForLead(Lead $lead, string $action, array $details = []): void
     {
         $log = [
-            'bundle' => 'lead', // must be set to "lead" otherwise it's not shown in lead view (tab "Audit log")
-            'object' => 'lead',
-            'objectId' => $lead->getId(),
-            'action' => $action,
-            'details' => $details,
+            'bundle'    => 'lead', // must be set to "lead" otherwise it's not shown in lead view (tab "Audit log")
+            'object'    => 'lead',
+            'objectId'  => $lead->getId(),
+            'action'    => $action,
+            'details'   => $details,
             'ipAddress' => $this->ipLookupHelper->getIpAddressFromRequest(),
         ];
         $this->auditLogModel->writeToLog($log);
     }
 
     /**
-     * This method creates the return value for the action response
-     * @param Request $request
-     * @return Response
+     * This method creates the return value for the action response.
      */
-    protected function createPixelResponse(Request $request): Response {
+    protected function createPixelResponse(Request $request): Response
+    {
         return TrackingPixelHelper::getResponse($this->request);
     }
 }

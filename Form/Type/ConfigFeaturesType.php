@@ -14,25 +14,17 @@ use Symfony\Component\Validator\Constraints\NotBlank;
 
 class ConfigFeaturesType extends AbstractType
 {
-    protected DataProviderUtility $dataProviderUtility;
-    protected FieldModel $fieldModel;
-
-    public function __construct(DataProviderUtility $dataProviderUtility, FieldModel $fieldModel)
+    public function __construct(protected DataProviderUtility $dataProviderUtility, protected FieldModel $fieldModel)
     {
-        $this->dataProviderUtility = $dataProviderUtility;
-        $this->fieldModel = $fieldModel;
     }
 
     /**
-     * @param FormBuilderInterface $builder
-     * @param array $options
-     * @return void
      * @throws Exception
      */
     public function buildForm(FormBuilderInterface $builder, array $options): void
     {
         $uniqueIdentifierFieldNames = $this->dataProviderUtility->getUniqueIdentifierFieldNames();
-        $parameterPrimaryChoices = [];
+        $parameterPrimaryChoices    = [];
         foreach ($uniqueIdentifierFieldNames as $fieldName) {
             $parameterPrimaryChoices[$fieldName] = $fieldName;
         }
@@ -41,13 +33,13 @@ class ConfigFeaturesType extends AbstractType
             'parameter_primary',
             ChoiceType::class,
             [
-                'choices' => $parameterPrimaryChoices,
-                'label' => 'leuchtfeueridentitysync.config.parameter_primary',
+                'choices'    => $parameterPrimaryChoices,
+                'label'      => 'leuchtfeueridentitysync.config.parameter_primary',
                 'label_attr' => ['class' => 'control-label'],
-                'required' => true,
-                'multiple' => false,
-                'attr' => [
-                    'class' => 'form-control',
+                'required'   => true,
+                'multiple'   => false,
+                'attr'       => [
+                    'class'   => 'form-control',
                     'tooltip' => 'leuchtfeueridentitysync.config.parameter_primary.tooltip',
                 ],
                 'constraints' => [
@@ -57,7 +49,7 @@ class ConfigFeaturesType extends AbstractType
         );
 
         $parameterSecondaryChoices = [];
-        $leadFields = $this->fieldModel->getRepository()->getFieldAliases('lead');
+        $leadFields                = $this->fieldModel->getRepository()->getFieldAliases('lead');
         foreach ($leadFields as $leadField) {
             $parameterSecondaryChoices[$leadField['alias']] = $leadField['alias'];
         }
@@ -66,13 +58,13 @@ class ConfigFeaturesType extends AbstractType
             'parameter_secondary',
             ChoiceType::class,
             [
-                'choices' => $parameterSecondaryChoices,
-                'label' => 'leuchtfeueridentitysync.config.parameter_secondary',
+                'choices'    => $parameterSecondaryChoices,
+                'label'      => 'leuchtfeueridentitysync.config.parameter_secondary',
                 'label_attr' => ['class' => 'control-label'],
-                'required' => false,
-                'multiple' => false,
-                'attr' => [
-                    'class' => 'form-control',
+                'required'   => false,
+                'multiple'   => false,
+                'attr'       => [
+                    'class'   => 'form-control',
                     'tooltip' => 'leuchtfeueridentitysync.config.parameter_secondary.tooltip',
                 ],
             ],
