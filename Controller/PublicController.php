@@ -105,6 +105,7 @@ class PublicController extends CommonFormController
         $this->leadRepository = $leadModel->getRepository();
         $result               = $leadModel->checkForDuplicateContact($query, true, true);
 
+        $result = $leadModel->checkForDuplicateContact($query, true, true);
         /** @var Lead $leadFromQuery */
         $leadFromQuery                      = $result[0];
         $this->publiclyUpdatableFieldValues = $result[1];
@@ -191,13 +192,14 @@ class PublicController extends CommonFormController
             $result = true;
             foreach ($uniqueLeadIdentifiers as $uniqueLeadIdentifier) {
                 if (array_key_exists($uniqueLeadIdentifier, $query)) {
-                    $fieldGetterName = 'get' . $uniqueLeadIdentifier; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
+                    $fieldGetterName = 'get'.$uniqueLeadIdentifier; // the CustomFieldEntityTrait handles the correct method-name to get/set the field (also when using underscores)
                     if ($lead->$fieldGetterName() !== $leadFromQuery->$fieldGetterName()) {
                         $result = false;
                         break;
                     }
                 }
             }
+
             return $result;
         };*/
 
